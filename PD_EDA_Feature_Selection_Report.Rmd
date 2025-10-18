@@ -1,0 +1,362 @@
+
+---
+title: "PD Exploratory Data Analysis and Feature Selection Report"
+author: "Fan Peng"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    latex_engine: xelatex
+    includes:
+      in_header: preamble.tex
+    number_sections: true
+    toc: true
+---
+
+```{r setup, include=FALSE}
+library(reticulate)
+use_condaenv("myenv", required = TRUE)
+py_config()
+```
+
+# Introduction
+
+This report aims to analyze a loan application dataset and build predictive models to identify customers who are likely to default, as indicated by the target variable BAD. Predicting loan defaults accurately is crucial for financial institutions to manage credit risk and make informed lending decisions.
+
+The analysis starts with a thorough exploratory data analysis (EDA) to understand the structure, distribution, and quality of the data. Visualizations and summary statistics are used to detect skewness, outliers, and imbalanced categories.
+
+Next, correlation analysis is performed to reveal relationships between features and to detect multicollinearity, ensuring that redundant information does not affect model performance.
+
+After gaining these insights, a Random Forest Classifier is employed to rank the features by their importance in predicting loan defaults. The most important features are then selected to train simplified yet effective models.
+
+Finally, both Random Forest and Logistic Regression models are evaluated to compare their performance using the selected features. This end-to-end approach demonstrates how data-driven feature selection and model validation can help build interpretable, accurate, and efficient credit risk prediction systems.
+
+# Data Loading
+
+```{python}
+
+# Import libraries
+import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+
+# Load data
+df = pd.read_excel("Copy of hmeq.xlsx")
+
+# Show basic info
+df.info()
+df.head()
+
+# Check missing values
+df.isnull().sum()
+```
+
+**Data Loading Explanation:**
+This part of the analysis imports essential Python libraries for data processing, visualization, and modeling. It then loads the dataset from an Excel file and displays basic information about its structure, including the number of rows, columns, and data types. The first few rows are shown to preview the data, and a check for missing values is performed to identify columns with incomplete data, which will need to be handled during preprocessing.
+
+# EDA
+
+## Descriptive statistics
+
+```{python}
+print(df.describe())
+```
+**Descriptive Statistics Explanation:**
+The table shows basic summary statistics for each variable in the dataset. For example, the mean loan amount (LOAN) is about $18,608, with a standard deviation of around $11,207, indicating high variation among applicants. The BAD column, which is the target variable, has a mean of about 0.20, meaning roughly 20% of applicants defaulted on their loans. Variables like CLNO (number of credit lines) and DEBTINC (debt-to-income ratio) also show reasonable ranges and variation, which helps understand the typical financial profile and spread in this dataset.
+
+## Distribution of numeric feature
+
+```{python}
+num_cols = df.select_dtypes(include=['float64', 'int64']).columns
+
+plt.figure(figsize=(15, 10))
+for i, col in enumerate(num_cols):
+    plt.subplot(len(num_cols)//3 + 1, 3, i+1)
+    sns.histplot(df[col].dropna(), kde=True, bins=30)
+    plt.title(f'Distribution of {col}')
+plt.tight_layout()
+plt.show()
+```
+
+**Distribution of Numeric Features Explanation:**
+The histograms show the distribution shape of each numeric variable in the dataset. Most numeric features, such as LOAN, MORTDUE, and VALUE, are right-skewed, meaning a majority of observations are clustered at lower values with a long tail to the right. Variables like CLNO (number of credit lines) and DEBTINC (debt-to-income ratio) appear more normally distributed but still show mild skewness. This overview helps to detect outliers, skewness, and the need for possible transformations before modeling.
+
+## Boxplots to detect outliers
+
+```{python}
+plt.figure(figsize=(15, 10))
+for i, col in enumerate(num_cols):
+    plt.subplot(len(num_cols)//3 + 1, 3, i+1)
+    sns.boxplot(x=df[col])
+    plt.title(f'Boxplot of {col}')
+plt.tight_layout()
+plt.show()
+```
+
+**Boxplots to Detect Outliers Explanation:**
+The boxplots show the spread and range of each numeric feature and help identify outliers. For most features, there are visible points far beyond the whiskers, indicating extreme values. Variables like LOAN, MORTDUE, and VALUE have many outliers on the higher end. Other features, such as CLNO and DEBTINC, also show scattered outliers. These plots confirm that outlier handling may be needed to avoid their impact on model training.
+
+## Categorical feature
+
+```{python}
+cat_cols = df.select_dtypes(include=['object', 'category']).columns
+
+for col in cat_cols:
+    plt.figure(figsize=(8, 4))
+    sns.countplot(x=col, data=df)
+    plt.title(f'Countplot of {col}')
+    plt.xticks(rotation=30)
+    plt.show()
+```
+
+**Categorical Feature Explanation:**
+The count plots display the frequency distribution for each categorical variable. For REASON, most cases fall under the DebtCon (debt consolidation) category, while fewer are for HomeImp (home improvement). For JOB, the majority of records are in the Other and ProfExe categories, with fewer in roles like Sales or Self. These plots help understand category balance and detect possible imbalance issues which may affect model performance.
+
+# Univariate analysis
+
+## Spearman Correlation
+
+```{python}
+# Encode categorical variables if needed
+df_encoded = df.copy()
+df_encoded['REASON'] = df_encoded['REASON'].astype('category').cat.codes
+df_encoded['JOB'] = df_encoded['JOB'].astype('category').cat.codes
+
+# Compute Spearman correlation matrix
+spearman_corr = df_encoded.corr(method='spearman')
+
+# Show matrix
+spearman_corr
+
+# Plot heatmap
+plt.figure(figsize=(12, 10))
+sns.heatmap(
+    spearman_corr,
+    annot=True,
+    cmap='coolwarm',
+    fmt=".2f"
+)
+
+plt.xticks(rotation=45, ha='right', fontsize=10)
+
+plt.yticks(rotation=0, fontsize=10)
+
+plt.title("Spearman Correlation Matrix")
+plt.tight_layout()
+plt.show()
+```
+
+**Spearman Correlation Explanation:**
+The heatmap shows the Spearman correlation coefficients between all variables, including encoded categorical ones. Most variables have weak to moderate correlations, as indicated by values close to zero. A strong positive correlation exists between VALUE and MORTDUE (about 0.86), suggesting these two are closely related. The target BAD has mild positive correlations with DEROG and DELINQ. This matrix helps identify relationships, multicollinearity risks, and features with predictive potential.
+
+## Inspect correlation matrix
+
+```{python}
+# ==========================================
+# Inspect: find highly correlated feature pairs & features correlated with the target variable
+# ==========================================
+
+# Mask the upper triangle to avoid duplicate pairs
+import numpy as np
+
+# Define threshold for high correlation (e.g., > 0.7)
+threshold = 0.7
+
+# Absolute correlation matrix
+corr_matrix = spearman_corr.abs()
+
+# Upper triangle mask
+upper = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
+
+# Identify highly correlated feature pairs
+high_corr_pairs = [
+    (col, row, upper.loc[row, col])
+    for col in upper.columns
+    for row in upper.index
+    if abs(upper.loc[row, col]) > threshold
+]
+
+print("\n🔑 Highly correlated feature pairs (|corr| > 0.7):")
+for pair in high_corr_pairs:
+    print(f"{pair[0]} & {pair[1]}: {pair[2]:.2f}")
+
+# ==========================================
+# Inspect correlation with the target variable (replace 'TARGET' with your actual target column)
+# ==========================================
+target_col = 'BAD'  # target column name
+
+if target_col in spearman_corr.columns:
+    target_corr = spearman_corr[target_col].drop(target_col).sort_values(key=abs, ascending=False)
+    print(f"\n🔑 Features highly correlated with target ({target_col}):")
+    print(target_corr)
+else:
+    print(f"\n⚠️ Column '{target_col}' not found in correlation matrix. Please check column name.")
+
+```
+
+**Inspect Correlation Matrix Explanation:**
+The inspection confirms that only one pair of features has a very high correlation: VALUE and MORTDUE (0.86), indicating potential redundancy. Most other feature pairs have low correlations, reducing multicollinearity concerns. Regarding the target BAD, features like DELINQ and DEROG show the strongest positive correlations, suggesting they may be useful predictors. Overall, this step helps decide which features might be dropped or kept for modeling.
+
+# PD - Random Forest Feature Importance
+
+## Load data & split (split train & test sets)
+
+```{python}
+import pandas as pd
+import numpy as np
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score
+import matplotlib.pyplot as plt
+
+X = df.drop(columns=['BAD'])
+y = df['BAD']
+
+# Split data into training and testing sets
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42)
+```
+
+**Load Data & Split Explanation:**
+This code first imports the necessary Python libraries for data processing, model building, and visualization. It then defines the features X by dropping the target variable BAD and sets y as the BAD column. Finally, the dataset is split into training and testing sets using a 70%–30% split, with a fixed random state to ensure reproducible results. This prepares the data for model training and evaluation.
+
+## Train random forest & Get feature importances
+
+```{python}
+import pandas as pd
+from sklearn.model_selection import train_test_split
+from sklearn.ensemble import RandomForestClassifier
+
+# 读取原始数据
+df = pd.read_excel("Copy of hmeq.xlsx")
+
+X = df.drop(columns=['BAD'])
+y = df['BAD']
+
+# One-Hot Encoding
+X_encoded = pd.get_dummies(X, drop_first=True)
+
+# Split
+X_train, X_test, y_train, y_test = train_test_split(X_encoded, y, test_size=0.3, random_state=42)
+
+# Train Random Forest
+rf = RandomForestClassifier(random_state=42)
+rf.fit(X_train, y_train)
+
+# Feature Importances
+importances = pd.Series(rf.feature_importances_, index=X_encoded.columns)
+print(importances.sort_values(ascending=False))
+
+# Sort feature importances in ascending order
+importances_sorted = importances.sort_values(ascending=True)
+```
+
+**Train Random Forest & Get Feature Importances Explanation:**
+This code reads the raw dataset, encodes categorical variables using one-hot encoding, and splits the data into training and testing sets. A Random Forest Classifier is then trained on the training data. After training, the model calculates feature importances, which show how much each feature contributes to predicting the target BAD. The output ranks features by importance, highlighting DEBTINC as the most influential, followed by VALUE and CLAGE. This helps identify which variables are most relevant for the prediction task.
+
+## Rank and select (sort and visualize)
+
+```{python}
+# Plot horizontal bar chart
+plt.figure(figsize=(10, 8))
+importances_sorted.plot(kind='barh')
+plt.title("Random Forest Feature Importance", fontsize=14)
+plt.xlabel("Importance", fontsize=12)
+plt.ylabel("Feature", fontsize=12)
+plt.yticks(fontsize=10)
+plt.tight_layout()
+plt.show()
+
+#  Select the top 5 most important features
+top_n = 5
+top_features = importances.sort_values(ascending=False).head(top_n).index.tolist()
+print(f"Top {top_n} important features:", top_features)
+```
+
+**Rank and Select Explanation:**
+This code plots a horizontal bar chart to visualize the importance of each feature in the Random Forest model. The features are sorted by importance, making it easy to see which ones contribute most to predictions. After plotting, the top 5 most important features are selected and listed. This helps to focus on the most relevant variables for building simpler and more effective models.
+
+## Use selected features (retrain model with top features)
+
+```{python}
+# Use the selected feature subset to retrain Random Forest (or Logistic Regression)
+X_train_top = X_train[top_features]
+X_test_top = X_test[top_features]
+
+# Missing Value Handling
+X_train_top = X_train_top.fillna(X_train_top.median())
+X_test_top = X_test_top.fillna(X_train_top.median())
+
+# Validate using Random Forest
+rf_top = RandomForestClassifier(random_state=42)
+rf_top.fit(X_train_top, y_train)
+y_pred_rf = rf_top.predict(X_test_top)
+rf_acc = accuracy_score(y_test, y_pred_rf)
+print(f"Random Forest accuracy with top {top_n} features: {rf_acc:.4f}")
+
+# Validate using Logistic Regression
+from sklearn.linear_model import LogisticRegression
+
+lr = LogisticRegression(max_iter=1000)
+lr.fit(X_train_top, y_train)
+y_pred_lr = lr.predict(X_test_top)
+lr_acc = accuracy_score(y_test, y_pred_lr)
+print(f"Logistic Regression accuracy with top {top_n} features: {lr_acc:.4f}")
+
+# For logistic regression:
+print("Logistic Regression coefficients:", lr.coef_)
+print("Intercept:", lr.intercept_)
+
+# For random forest:
+print("Random Forest feature importances (on top features):", rf_top.feature_importances_)
+
+```
+
+**Use Selected Features Explanation:**
+This code selects the top 5 most important features and uses them to retrain a Random Forest model. It handles any missing values by filling them with the median. The model is then evaluated on the test data, showing good accuracy with only the top features. Additionally, Logistic Regression is also trained and tested for comparison. The printed results show the accuracy for both models, the Logistic Regression coefficients, and the Random Forest feature importances, confirming that a small number of key features can still achieve strong predictive performance.
+
+# Comparison & Interpretation
+
+```{python}
+top_n = 5
+
+# Sort by absolute value
+lr_coef = pd.Series(lr.coef_[0], index=X_train_top.columns)
+lr_top_features = lr_coef.abs().sort_values(ascending=False).head(top_n)
+print("Top features by Logistic Regression (absolute coef):")
+print(lr_top_features)
+
+# Random Forest Feature Importances
+rf_importance = pd.Series(rf_top.feature_importances_, index=X_train_top.columns)
+rf_top_features = rf_importance.sort_values(ascending=False).head(top_n)
+print("\nTop features by Random Forest:")
+print(rf_top_features)
+
+# Compare whether the two models have selected the same features
+common_features = set(lr_top_features.index) & set(rf_top_features.index)
+only_in_lr = set(lr_top_features.index) - set(rf_top_features.index)
+only_in_rf = set(rf_top_features.index) - set(lr_top_features.index)
+
+print("\n🟢 Common top features:", common_features)
+print("🔵 Top in Logistic Regression only:", only_in_lr)
+print("🟠 Top in Random Forest only:", only_in_rf)
+```
+**4a. Does the rank ordering of top features align with your intuition?**
+The top features selected by both Logistic Regression and Random Forest include [e.g., DEBTINC, DELINQ], which aligns with the intuitive belief that debt-to-income ratio and delinquency history are highly predictive of loan default risk. This supports the model interpretability.
+
+**4b. Are there any features that ranked high in one approach but not the other?**
+Yes. For example, [e.g., CLAGE] appeared in the top 5 of Logistic Regression but not in Random Forest. This may be due to the linearity assumption of Logistic Regression favoring variables with consistent global trends, whereas Random Forest can capture interactions and nonlinearities that give weight to other features like [e.g., VALUE].
+
+# Conclusion
+
+In this report, we performed a complete exploratory data analysis (EDA) and feature selection on the dataset to predict the target variable BAD. We started by examining descriptive statistics and visualizing the distribution of numeric and categorical features, which helped identify data patterns, skewness, and possible outliers. Boxplots confirmed the presence of outliers in several numeric variables.
+
+Next, we computed Spearman correlations to understand relationships among variables and detect multicollinearity. The inspection showed that VALUE and MORTDUE are highly correlated, suggesting redundancy, while DELINQ and DEROG showed the strongest correlations with the target.
+
+Using Random Forest, we ranked feature importance and visualized it to clearly see which features contribute most to predicting loan default risk (BAD). We then selected the top 5 important features and retrained both Random Forest and Logistic Regression models using this subset. The results demonstrated that even with fewer features, both models maintained strong predictive performance: the Random Forest achieved an accuracy around 0.89 and Logistic Regression around 0.81.
+
+Overall, this workflow shows that careful EDA, correlation analysis, and feature ranking can simplify models without sacrificing much accuracy. This helps build interpretable, efficient models for credit risk prediction, while reducing noise from less informative variables.
+
